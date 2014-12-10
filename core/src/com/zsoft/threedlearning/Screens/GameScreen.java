@@ -1,6 +1,8 @@
 package com.zsoft.threedlearning.Screens;
 
 import com.badlogic.gdx.Gdx;
+import com.badlogic.gdx.InputAdapter;
+import com.badlogic.gdx.InputMultiplexer;
 import com.badlogic.gdx.Screen;
 import com.badlogic.gdx.assets.AssetManager;
 import com.badlogic.gdx.assets.loaders.ModelLoader;
@@ -14,8 +16,12 @@ import com.badlogic.gdx.graphics.g3d.loader.ObjLoader;
 import com.badlogic.gdx.graphics.g3d.model.Node;
 import com.badlogic.gdx.graphics.g3d.utils.CameraInputController;
 import com.badlogic.gdx.graphics.g3d.utils.ModelBuilder;
+import com.badlogic.gdx.math.Intersector;
 import com.badlogic.gdx.math.Vector3;
+import com.badlogic.gdx.math.collision.BoundingBox;
+import com.badlogic.gdx.math.collision.Ray;
 import com.badlogic.gdx.scenes.scene2d.Stage;
+import com.badlogic.gdx.scenes.scene2d.ui.Label;
 import com.badlogic.gdx.scenes.scene2d.ui.Skin;
 import com.badlogic.gdx.utils.Array;
 import com.zsoft.threedlearning.MainGame;
@@ -23,13 +29,11 @@ import com.zsoft.threedlearning.MainGame;
 /**
  * Created by zac520 on 12/9/14.
  */
-public class GameScreen implements Screen {
+public class GameScreen extends InputAdapter   implements Screen {
 
     MainGame mainGame;
-    BitmapFont font;
     MainGame game;
     OrthographicCamera camera;
-    Stage stage;
     SpriteBatch batch;
     Skin skin;
     public PerspectiveCamera cam;
@@ -38,19 +42,32 @@ public class GameScreen implements Screen {
 
     /*3d stuff*/
     public Model model;
-    public ModelInstance instance;
+    public GameObject instance;
     public ModelBatch modelBatch;
     public Environment environment;
     public CameraInputController camController;
-    public Array<ModelInstance> instances = new Array<ModelInstance>();
-    public Array<ModelInstance> blocks = new Array<ModelInstance>();
-    public Array<ModelInstance> invaders = new Array<ModelInstance>();
-    public ModelInstance ship;
-    public ModelInstance space;
+    public Array<GameObject> instances = new Array<GameObject>();
+    public Array<GameObject> blocks = new Array<GameObject>();
+    public Array<GameObject> invaders = new Array<GameObject>();
+    public GameObject ship;
+    public GameObject space;
 
     /*testvars*/
     public Model model2;
-    public ModelInstance instance2;
+    public GameObject instance2;
+
+    /* frustrum culling and testing*/
+    protected Stage stage;
+    protected Label label;
+    protected BitmapFont font;
+    protected StringBuilder stringBuilder;
+    private int visibleCount;
+    private Vector3 position = new Vector3();
+
+    /**selecting and interacting with objects**/
+    private int selected = -1, selecting = -1;
+    private Material selectionMaterial;
+    private Material originalMaterial;
 
     public GameScreen(MainGame pGame){
         game = pGame;
@@ -58,7 +75,7 @@ public class GameScreen implements Screen {
 
         //initialize camera
         cam = new PerspectiveCamera(67, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
-        cam.position.set(100, 100, 100);
+        cam.position.set(10, 10, 10);
         cam.lookAt(0,0,0);
         cam.near = 1f;
         cam.far = 300f;
@@ -72,7 +89,7 @@ public class GameScreen implements Screen {
 //        model2 = modelBuilder.createBox(5f, 5f, 5f,
 //                new Material(ColorAttribute.createDiffuse(Color.GREEN)),
 //                VertexAttributes.Usage.Position | VertexAttributes.Usage.Normal);
-//        instance2 = new ModelInstance(model2);
+//        instance2 = new GameObject(model2);
 
 
         //set up some lighting
@@ -82,12 +99,21 @@ public class GameScreen implements Screen {
 
         //set up a controller
         camController = new CameraInputController(cam);
-        Gdx.input.setInputProcessor(camController);
-
+        Gdx.input.setInputProcessor(new InputMultiplexer(this, camController));
+        
         //load the model(s)
         assets = new AssetManager();
         assets.load("assets/invaders/spaceinvaders.g3db", Model.class);
         loading = true;
+
+        //set up some stuff for the frustrum culling
+        stage = new Stage();
+        font = new BitmapFont();
+        label = new Label(" ", new Label.LabelStyle(font, Color.WHITE));
+        stage.addActor(label);
+        stringBuilder = new StringBuilder();
+
+
     }
 
     @Override
@@ -98,7 +124,7 @@ public class GameScreen implements Screen {
         Model model = assets.get("assets/invaders/spaceinvaders.g3db", Model.class);
         for (int i = 0; i < model.nodes.size; i++) {
             String id = model.nodes.get(i).id;
-            ModelInstance instance = new ModelInstance(model, id);
+            GameObject instance = new GameObject(model, id, false);
             Node node = instance.getNode(id);
 
             instance.transform.set(node.globalTransform);
@@ -139,20 +165,112 @@ public class GameScreen implements Screen {
 
 
         modelBatch.begin(cam);
-        modelBatch.render(instances, environment);
+
+        visibleCount = 0;
+        for (final GameObject instance : instances) {//only render what is visible
+            if (isVisible(cam, instance)) {
+                modelBatch.render(instance, environment);
+                visibleCount++;
+            }
+        }
+
         if (space != null)
             modelBatch.render(space);
 
-        //test area
-        //modelBatch.render(instance2, environment);
-
-        //
 
         modelBatch.end();
+
+        stringBuilder.setLength(0);
+        stringBuilder.append(" FPS: ").append(Gdx.graphics.getFramesPerSecond());
+        stringBuilder.append(" Visible: ").append(visibleCount);
+        label.setText(stringBuilder);
+        stage.draw();
+    }
+    protected boolean isVisible(final Camera cam, final GameObject instance) {
+        instance.transform.getTranslation(position);
+        return cam.frustum.pointInFrustum(position);
+    }
+
+    /**
+     * This class is used to slightly expand the frustrum culling. It is used because the standard will only look
+     * for the center of an object. If the center is out of the screen, we aren't rendering. This will solve that
+     * by estimating its width.
+     */
+    public static class GameObject extends ModelInstance {
+        public final Vector3 center = new Vector3();
+        public final Vector3 dimensions = new Vector3();
+        public final float radius;
+
+        private final static BoundingBox bounds = new BoundingBox();
+
+        public GameObject(Model model, String rootNode, boolean mergeTransform) {
+            super(model, rootNode, mergeTransform);
+            calculateBoundingBox(bounds);
+            bounds.getCenter(center);
+            bounds.getDimensions(dimensions);
+            radius = dimensions.len() / 2f;
+        }
+    }
+    @Override
+    public boolean touchDown (int screenX, int screenY, int pointer, int button) {
+        selecting = getObject(screenX, screenY);
+        return selecting >= 0;
     }
 
     @Override
+    public boolean touchDragged (int screenX, int screenY, int pointer) {
+        return selecting >= 0;
+    }
+
+    @Override
+    public boolean touchUp (int screenX, int screenY, int pointer, int button) {
+        if (selecting >= 0) {
+            if (selecting == getObject(screenX, screenY))
+                setSelected(selecting);
+            selecting = -1;
+            return true;
+        }
+        return false;
+    }
+
+    public void setSelected (int value) {
+        if (selected == value) return;
+        if (selected >= 0) {
+            Material mat = instances.get(selected).materials.get(0);
+            mat.clear();
+            mat.set(originalMaterial);
+        }
+        selected = value;
+        if (selected >= 0) {
+            Material mat = instances.get(selected).materials.get(0);
+            originalMaterial.clear();
+            originalMaterial.set(mat);
+            mat.clear();
+            mat.set(selectionMaterial);
+        }
+    }
+
+    public int getObject (int screenX, int screenY) {
+        Ray ray = cam.getPickRay(screenX, screenY);
+        int result = -1;
+        float distance = -1;
+        for (int i = 0; i < instances.size; ++i) {
+            final GameObject instance = instances.get(i);
+            instance.transform.getTranslation(position);
+            position.add(instance.center);
+            float dist2 = ray.origin.dst2(position);
+            if (distance >= 0f && dist2 > distance) continue;
+            if (Intersector.intersectRaySphere(ray, position, instance.radius, null)) {
+                result = i;
+                distance = dist2;
+            }
+        }
+        return result;
+    }
+    
+    @Override
     public void resize(int width, int height) {
+        stage.getViewport().update(width, height, true);
 
     }
 
