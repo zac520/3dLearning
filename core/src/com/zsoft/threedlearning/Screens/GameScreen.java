@@ -11,8 +11,10 @@ import com.badlogic.gdx.graphics.g3d.*;
 import com.badlogic.gdx.graphics.g3d.attributes.ColorAttribute;
 import com.badlogic.gdx.graphics.g3d.environment.DirectionalLight;
 import com.badlogic.gdx.graphics.g3d.loader.ObjLoader;
+import com.badlogic.gdx.graphics.g3d.model.Node;
 import com.badlogic.gdx.graphics.g3d.utils.CameraInputController;
 import com.badlogic.gdx.graphics.g3d.utils.ModelBuilder;
+import com.badlogic.gdx.math.Vector3;
 import com.badlogic.gdx.scenes.scene2d.Stage;
 import com.badlogic.gdx.scenes.scene2d.ui.Skin;
 import com.badlogic.gdx.utils.Array;
@@ -41,6 +43,14 @@ public class GameScreen implements Screen {
     public Environment environment;
     public CameraInputController camController;
     public Array<ModelInstance> instances = new Array<ModelInstance>();
+    public Array<ModelInstance> blocks = new Array<ModelInstance>();
+    public Array<ModelInstance> invaders = new Array<ModelInstance>();
+    public ModelInstance ship;
+    public ModelInstance space;
+
+    /*testvars*/
+    public Model model2;
+    public ModelInstance instance2;
 
     public GameScreen(MainGame pGame){
         game = pGame;
@@ -48,7 +58,7 @@ public class GameScreen implements Screen {
 
         //initialize camera
         cam = new PerspectiveCamera(67, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
-        cam.position.set(7f, 7f, 7f);
+        cam.position.set(100, 100, 100);
         cam.lookAt(0,0,0);
         cam.near = 1f;
         cam.far = 300f;
@@ -57,12 +67,12 @@ public class GameScreen implements Screen {
         //initialize the batch to hold models
         modelBatch = new ModelBatch();
 
-//        //make a box model
+        //make a box model
 //        ModelBuilder modelBuilder = new ModelBuilder();
-//        model = modelBuilder.createBox(5f, 5f, 5f,
+//        model2 = modelBuilder.createBox(5f, 5f, 5f,
 //                new Material(ColorAttribute.createDiffuse(Color.GREEN)),
 //                VertexAttributes.Usage.Position | VertexAttributes.Usage.Normal);
-//        instance = new ModelInstance(model);
+//        instance2 = new ModelInstance(model2);
 
 
         //set up some lighting
@@ -76,7 +86,7 @@ public class GameScreen implements Screen {
 
         //load the model(s)
         assets = new AssetManager();
-        assets.load("assets/ship/ship.g3db", Model.class);
+        assets.load("assets/invaders/spaceinvaders.g3db", Model.class);
         loading = true;
     }
 
@@ -85,14 +95,33 @@ public class GameScreen implements Screen {
 
     }
     private void doneLoading() {
-        Model ship = assets.get("assets/ship/ship.g3db", Model.class);
-        for (float x = -5f; x <= 5f; x += 2f) {
-            for (float z = -5f; z <= 5f; z += 2f) {
-                ModelInstance shipInstance = new ModelInstance(ship);
-                shipInstance.transform.setToTranslation(x, 0, z);
-                instances.add(shipInstance);
+        Model model = assets.get("assets/invaders/spaceinvaders.g3db", Model.class);
+        for (int i = 0; i < model.nodes.size; i++) {
+            String id = model.nodes.get(i).id;
+            ModelInstance instance = new ModelInstance(model, id);
+            Node node = instance.getNode(id);
+
+            instance.transform.set(node.globalTransform);
+            node.translation.set(0,0,0);
+            node.scale.set(1,1,1);
+            node.rotation.idt();
+            instance.calculateTransforms();
+
+            if (id.equals("space")) {
+                space = instance;
+                continue;
             }
+
+            instances.add(instance);
+
+            if (id.equals("ship"))
+                ship = instance;
+            else if (id.startsWith("block"))
+                blocks.add(instance);
+            else if (id.startsWith("invader"))
+                invaders.add(instance);
         }
+
         loading = false;
     }
     @Override
@@ -104,13 +133,22 @@ public class GameScreen implements Screen {
         if (loading && assets.update()){
             doneLoading();
         }
+
+
         camController.update();
+
 
         modelBatch.begin(cam);
         modelBatch.render(instances, environment);
+        if (space != null)
+            modelBatch.render(space);
+
+        //test area
+        //modelBatch.render(instance2, environment);
+
+        //
+
         modelBatch.end();
-
-
     }
 
     @Override
